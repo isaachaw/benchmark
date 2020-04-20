@@ -1,24 +1,14 @@
-from collections import namedtuple
 import os
-from typing import List, Tuple
 import random
+from typing import List, Tuple
 
 import cv2
-import matplotlib.pyplot as plt
 import numpy as np
 
+from general import GenerateOptions, Dimensions, Region, Point2D, get_all_file_paths
 
-# Base_Path = "C:/workspace/consolsys/InnoLab/benchmark"
-Base_Path = "D:/workspace/benchmark"
-Region = namedtuple("Region", ("top", "left", "bottom", "right"))
-Dimensions = namedtuple("Shape", ("height", "width"))
 
-class OptionsA(object):
-    def __init__(self):
-        self.random_brightness = True
-        self.random_glare = True
-        self.random_transform = True
-        self.random_distortion = True
+IMG_FILE_EXTENSIONS = (".jpg", ".png", ".bmp")
 
 
 def change_brightness(img: np.ndarray, value=0) -> np.ndarray:
@@ -35,8 +25,8 @@ def change_brightness(img: np.ndarray, value=0) -> np.ndarray:
     return img
 
 
-def blur(img: np.ndarray, kernel_size=5) -> np.ndarray:
-    img = cv2.GaussianBlur(img, (kernel_size, kernel_size), cv2.BORDER_DEFAULT)
+def blur(img: np.ndarray, kernel_size=3) -> np.ndarray:
+    img = cv2.GaussianBlur(img, (kernel_size, kernel_size), 1)
     return img
 
 
@@ -46,36 +36,36 @@ def rescale(img: np.ndarray, scale=1.) -> np.ndarray:
     return img
 
 
-def get_fg_crop_region(fg_dims: Dimensions, bg_dims: Dimensions, fg_location: Tuple[int, int]) -> Region:
-    fg_img_h, fg_img_w = fg_dims.height, fg_dims.width
-    bg_img_h, bg_img_w = bg_dims.height, bg_dims.width
-    fg_x, fg_y = fg_location
+def get_fg_crop_region(fg_dims: Dimensions, bg_dims: Dimensions, fg_loc: Point2D) -> Region:
+    fg_h, fg_w = fg_dims
+    bg_h, bg_w = bg_dims
+    fg_x, fg_y = fg_loc
 
     fg_crop_top = max(-fg_y, 0)
     fg_crop_left = max(-fg_x, 0)
-    fg_crop_bottom = min(-fg_y + bg_img_h, fg_img_h)
-    fg_crop_right = min(-fg_x + bg_img_w, fg_img_w)
+    fg_crop_bottom = min(-fg_y + bg_h, fg_h)
+    fg_crop_right = min(-fg_x + bg_w, fg_w)
 
     fg_crop_region = Region(fg_crop_top, fg_crop_left, fg_crop_bottom, fg_crop_right)
     return fg_crop_region
 
 
-def get_bg_crop_region(fg_dims: np.ndarray, bg_dims: np.ndarray, fg_location: Tuple[int, int]) -> Region:
-    fg_img_h, fg_img_w = fg_dims.height, fg_dims.width
-    bg_img_h, bg_img_w = bg_dims.height, bg_dims.width
-    fg_x, fg_y = fg_location
+def get_bg_crop_region(fg_dims: np.ndarray, bg_dims: np.ndarray, fg_loc: Point2D) -> Region:
+    fg_h, fg_w = fg_dims
+    bg_h, bg_w = bg_dims
+    fg_x, fg_y = fg_loc
 
     bg_crop_top = max(fg_y, 0)
     bg_crop_left = max(fg_x, 0)
-    bg_crop_bottom = min(fg_y + fg_img_h, bg_img_h)
-    bg_crop_right = min(fg_x + fg_img_w , bg_img_w)
+    bg_crop_bottom = min(fg_y + fg_h, bg_h)
+    bg_crop_right = min(fg_x + fg_w , bg_w)
 
-    bg_crop_region = Region(bg_crop_top, bg_crop_left, bg_crop_bottom, bg_crop_right)
-    return bg_crop_region
+    bg_crop_reg = Region(bg_crop_top, bg_crop_left, bg_crop_bottom, bg_crop_right)
+    return bg_crop_reg
 
 
-def crop(img: np.ndarray, region: Region) -> np.ndarray:
-    return img[region.top:region.bottom, region.left:region.right, :]
+def crop(img: np.ndarray, reg: Region) -> np.ndarray:
+    return img[reg.top:reg.bottom, reg.left:reg.right, :]
 
 
 def overlay(fg_img: np.ndarray, bg_img: np.ndarray, fg_weight: np.ndarray) -> np.ndarray:
@@ -84,27 +74,32 @@ def overlay(fg_img: np.ndarray, bg_img: np.ndarray, fg_weight: np.ndarray) -> np
     return overlayed
 
 
-def patch_overlay(fg_img: np.ndarray, bg_img: np.ndarray, fg_weight: np.ndarray, location: Tuple[int, int]) -> np.ndarray:
+def patch_overlay(fg_img: np.ndarray, bg_img: np.ndarray, fg_weight: np.ndarray, loc: Point2D) -> np.ndarray:
     fg_dims = get_dims(fg_img)
     bg_dims = get_dims(bg_img)
-    fg_crop_region = get_fg_crop_region(fg_dims, bg_dims, location)
-    bg_crop_region = get_bg_crop_region(fg_dims, bg_dims, location)
+    fg_crop_reg = get_fg_crop_region(fg_dims, bg_dims, loc)
+    bg_crop_reg = get_bg_crop_region(fg_dims, bg_dims, loc)
     
-    cropped_fg_img = crop(fg_img, fg_crop_region)
-    cropped_fg_weight = crop(fg_weight, fg_crop_region)
-    cropped_bg_img = crop(bg_img, bg_crop_region)
+    cropped_fg_img = crop(fg_img, fg_crop_reg)
+    cropped_fg_weight = crop(fg_weight, fg_crop_reg)
+    cropped_bg_img = crop(bg_img, bg_crop_reg)
     patch = overlay(cropped_fg_img, cropped_bg_img, cropped_fg_weight)
     patch = patch.astype(np.uint8)
 
     img = bg_img.copy()
-    img[bg_crop_region.top:bg_crop_region.bottom, bg_crop_region.left:bg_crop_region.right, :] = patch
+    img[bg_crop_reg.top:bg_crop_reg.bottom, bg_crop_reg.left:bg_crop_reg.right, :] = patch
 
     return img
 
 
+def get_dims(img: np.ndarray) -> Dimensions:
+    img_h, img_w = img.shape[:2]
+    return Dimensions(img_h, img_w)
+
+
 class RandomTransform(object):
     def __init__(self, img_dims: Dimensions, transform_pct=.15):
-        img_h, img_w = img_dims.height, img_dims.width
+        img_h, img_w = img_dims
         points = np.float32([[0, 0], [img_w, 0], [img_w, img_h], [0, img_h]])
         transformed_points = np.float32([
             [random.uniform(0, img_w * transform_pct), random.uniform(0, img_h * transform_pct)],
@@ -130,59 +125,49 @@ class RandomTransform(object):
 
 
 class RandomGlare(object):
-    def __init__(self):
-        image_paths = [
-            os.path.join(Base_Path, "glare_images/kisspng-line-symmetry-angle-point-pattern-5a680f613edda1.6763382615167691212575.png"),
-            os.path.join(Base_Path, "glare_images/star-light-png-transparent.png"),
-            os.path.join(Base_Path, "glare_images/tv-glare-png-2-transparent.png"),
-        ]
-        self._glare_images = [self._read_image(img_path) for img_path in image_paths]
+    def __init__(self, options: GenerateOptions):
+        glare_img_path_base = options.glare_img_path
+        if not glare_img_path_base:
+            raise Exception("glare_img_path is not defined")
+        img_paths = [file_path for file_path in get_all_file_paths(
+            glare_img_path_base) if os.path.splitext(file_path)[1].lower() in IMG_FILE_EXTENSIONS]
+        if not len(img_paths):
+            raise Exception("glare_img_path contains no images")
+        self._glare_images = [self._read_image(
+            img_path) for img_path in img_paths]
 
 
-    def _read_image(self, img_path):
+    def _read_image(self, img_path: str) -> np.ndarray:
         img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
         img_channels = img.shape[2]
         assert img_channels == 4
         return img
 
 
-    def _get_random_glare_location(self, glare_img, bg_img):
-        glare_img_h, glare_img_w = glare_img.shape[:2]
-        bg_img_h, bg_img_w = bg_img.shape[:2]
+    def _get_random_glare_location(self, glare_img: np.ndarray, bg_img: np.ndarray) -> Point2D:
+        glare_h, glare_w = glare_img.shape[:2]
+        bg_h, bg_w = bg_img.shape[:2]
 
-        glare_x = random.randint(0, bg_img_w) - glare_img_w // 2
-        glare_y = random.randint(0, bg_img_h) - glare_img_h // 2
+        glare_x = random.randint(0, bg_w) - glare_w // 2
+        glare_y = random.randint(0, bg_h) - glare_h // 2
 
-        return glare_x, glare_y
+        return Point2D(glare_x, glare_y)
 
 
     def apply(self, img: np.ndarray) -> np.ndarray:
         glare_img = self._glare_images[random.randint(0, len(self._glare_images) - 1)]
         glare_img = rescale(glare_img, 1. + random.random())
-        glare_dims = get_dims(glare_img)
-        img_dims = get_dims(img)
 
-        weight = glare_img[:, :, [3]] / 255.
+        glare_weight = glare_img[:, :, [3]] / 255.
         glare_img = glare_img[:, :, :3]
+        glare_loc = self._get_random_glare_location(glare_img, img)
 
-        glare_location = self._get_random_glare_location(glare_img, img)
-
-        glare_crop_region = get_fg_crop_region(glare_dims, img_dims, glare_location)
-        image_crop_region = get_bg_crop_region(glare_dims, img_dims, glare_location)
-
-        cropped_weight = crop(weight, glare_crop_region)
-
-        patch = overlay(crop(glare_img, glare_crop_region), crop(img, image_crop_region), cropped_weight)
-        patch = patch.astype(np.uint8)
-
-        img = img.copy()
-        img[image_crop_region.top:image_crop_region.bottom, image_crop_region.left:image_crop_region.right, :] = patch
-
+        img = patch_overlay(glare_img, img, glare_weight, glare_loc)
         return img
 
 
-def get_random_brightness(range=100) -> int:
-    value = random.randrange(-range, range + 1)
+def get_random_brightness(range=0) -> int:
+    value = random.randint(-range, range)
     return value
 
 
@@ -197,35 +182,12 @@ def get_random_scale(scale_min=0.5, scale_max=1.5) -> float:
     return scale
 
 
-def get_random_placement(fg_dims: Dimensions, bg_dims: Dimensions) -> Tuple[int, int]:
+def get_random_placement(fg_dims: Dimensions, bg_dims: Dimensions) -> Point2D:
     if fg_dims.height > bg_dims.height or fg_dims.width > bg_dims.width:
         raise Exception("background is smaller than foreground")
-    x_range = bg_dims.width - fg_dims.width
-    y_range = bg_dims.height - fg_dims.height
-    x = random.randint(0, x_range)
-    y = random.randint(0, y_range)
-    return x, y
-
-
-class RandomPlacement(object):
-    def __init__(self, bg_shape: Tuple[int, int], fg_shape: Tuple[int, int]):
-        bg_h, bg_w = bg_shape
-        fg_h, fh_w = fg_shape
-        if fg_h > bg_h or fg_w > bg_w:
-            raise Exception("background is smaller than foreground")
-
-        w_range = bg_w - fg_w
-        h_range = bg_h - fg_h
-        self.x_translation = random.randint(0, w_range)
-        self.y_translation = random.randint(0, h_range)
-
-
-    def apply(self,   image: np.ndarray) -> np.ndarray:
-        pass
-
-
-    def apply_points(self, points: np.ndarray) -> np.ndarray:
-        pass
+    x = random.randint(0, bg_dims.width - fg_dims.width)
+    y = random.randint(0, bg_dims.height - fg_dims.height)
+    return Point2D(x, y)
 
 
 class RandomDistortion(object):
@@ -265,79 +227,119 @@ class RandomDistortion(object):
         return np.squeeze(new_points)
 
 
-def get_points(img_h: int, img_w: int) -> np.ndarray:
-    return np.asarray([
-        (0, 0),
-        (int(img_w * .25), 0),
-        (int(img_w * .5), 0),
-        (int(img_w * .75), 0),
-        (img_w, 0),
-        (img_w, int(img_h * .25)),
-        (img_w, int(img_h * .5)),
-        (img_w, int(img_h * .75)),
-        (img_w, img_h),
-        (int(img_w * .75), img_h),
-        (int(img_w * .5), img_h),
-        (int(img_w * .25), img_h),
-        (0, img_h),
-        (0, int(img_h * .75)),
-        (0, int(img_h * .5)),
-        (0, int(img_h * .25)),
-    ])
+def get_points(img_dims: Dimensions, options: GenerateOptions) -> np.ndarray:
+    img_h, img_w = img_dims
+
+    if options.random_distortion:
+        return np.asarray([
+            (0, 0),
+            (int(img_w * .25), 0),
+            (int(img_w * .5), 0),
+            (int(img_w * .75), 0),
+            (img_w, 0),
+            (img_w, int(img_h * .25)),
+            (img_w, int(img_h * .5)),
+            (img_w, int(img_h * .75)),
+            (img_w, img_h),
+            (int(img_w * .75), img_h),
+            (int(img_w * .5), img_h),
+            (int(img_w * .25), img_h),
+            (0, img_h),
+            (0, int(img_h * .75)),
+            (0, int(img_h * .5)),
+            (0, int(img_h * .25)),
+        ])
+    else:
+        return np.asarray([
+            (0, 0),
+            (img_w, 0),
+            (img_w, img_h),
+            (0, img_h),
+        ])
 
 
-def transform_image(image: np.ndarray, options: OptionsA) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    # scale = get_random_scale()
-    # image = rescale(image, scale)
+def create_mask(img_dims: Dimensions) -> np.ndarray:
+    img_h, img_w = img_dims
+    weight = np.ones([img_h, img_w, 1], dtype=np.float32)
 
-    img_h, img_w = image.shape[:2]
-    img_dims = get_dims(image)
+    offset = int(img_h * .05)
     
-    # cv2.imshow("rescaled", image)
+    weight[0:offset, 0:offset, :] = 0.
+    weight[0:offset, img_w - offset:img_w, :] = 0.
+    weight[img_h - offset:img_h, img_w - offset:img_w, :] = 0.
+    weight[img_h - offset:img_h, 0:offset, :] = 0.
+
+    fill_size = tuple([offset] * 2)
+
+    cv2.ellipse(weight, (offset, offset), fill_size, 180., 0., 90, 1., -1)
+    cv2.ellipse(weight, (img_w - offset, offset), fill_size, 270., 0., 90, 1., -1)
+    cv2.ellipse(weight, (img_w - offset, img_h - offset), fill_size, 0., 0., 90, 1., -1)
+    cv2.ellipse(weight, (offset, img_h - offset), fill_size, 90., 0., 90, 1., -1)
     
-    weight_mask = np.ones([img_h, img_w, 1], dtype=np.float32)
-    points = get_points(img_h, img_w)
-    
-    # background_image = image
+    return weight
+
+
+def expand_edge(img: np.ndarray, size=0) -> np.ndarray:
+    if size == 0:
+        return img.copy()
+    img_h, img_w, img_c = img.shape[:3]
+    zeros = np.zeros((img_h, size, img_c), dtype=img.dtype)
+    img = np.concatenate((zeros, img, zeros), axis=1)
+    zeros = np.zeros((size, img_w + 2 * size, img_c), dtype=img.dtype)
+    img = np.concatenate((zeros, img, zeros), axis=0)
+    return img
+
+
+def create_blur_edge_mask(img_dims: Dimensions, edge_size=0) -> np.ndarray:
+    img_h, img_w = img_dims
+    weight = np.zeros([img_h, img_w, 1], dtype=np.float32)
+    weight[0:edge_size, :, :] = 1.
+    weight[-edge_size:, :, :] = 1.
+    weight[:, 0:edge_size, :] = 1.
+    weight[:, -edge_size:, :] = 1.
+    return weight
+
+
+def transform_image(img: np.ndarray, options: GenerateOptions) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    img_dims = get_dims(img)
+
+    # trim masks and points
+    trim_size = int(img_dims.width * 0.01)
+    trim_dims = Dimensions(img_dims.height - trim_size * 2, img_dims.width - trim_size * 2)
+    weight_mask = expand_edge(create_mask(trim_dims), trim_size)
+    blur_mask = create_blur_edge_mask(img_dims, edge_size=trim_size * 2)
+    points = get_points(trim_dims, options) + (trim_size, trim_size)
 
     if options.random_brightness:
         brightness = get_random_brightness(30)
-        image = change_brightness(image, brightness)
+        img = change_brightness(img, brightness)
         # cv2.imshow("brightness", image)
 
     if options.random_glare:
-        glare = RandomGlare()
-        image = glare.apply(image)
+        glare = RandomGlare(options)
+        img = glare.apply(img)
         # cv2.imshow("glare", image)
 
     if options.random_transform:
         transform = RandomTransform(img_dims)
-        image = transform.apply(image, (255, 255, 255))
+        img = transform.apply(img, (255, 255, 255))
         weight_mask = transform.apply(weight_mask, (0,))
+        blur_mask = transform.apply(blur_mask, (0, 0))
         points = transform.apply_points(points)
         # cv2.imshow("transformed", image)
 
     if options.random_distortion:
         distortion = RandomDistortion(img_dims)
-        image = distortion.apply(image, (255, 255, 255))
+        img = distortion.apply(img, (255, 255, 255))
         weight_mask = distortion.apply(weight_mask, (0,))
+        blur_mask = distortion.apply(blur_mask, (0,))
         points = distortion.apply_points(points)
         # cv2.imshow("distorted", image)
 
-    # image = overlay(image, background_image, weight_mask)
-    # image = blur(image, kernel_size=3)
-    
-    # cv2.imshow("overlayed", image)
-
-    return image, weight_mask, points
+    return img, weight_mask, blur_mask, points
 
 
-def get_dims(img: np.ndarray) -> Dimensions:
-    img_h, img_w = img.shape[:2]
-    return Dimensions(img_h, img_w)
-
-
-def generate(bg_img: np.ndarray, fg_img: np.ndarray, options: OptionsA) -> np.ndarray:
+def generate(bg_img: np.ndarray, fg_img: np.ndarray, options: GenerateOptions) -> np.ndarray:
     fg_dims = get_dims(fg_img)
     bg_dims = get_dims(bg_img)
 
@@ -352,30 +354,17 @@ def generate(bg_img: np.ndarray, fg_img: np.ndarray, options: OptionsA) -> np.nd
     scale = get_random_scale(scale_min=(scale / 2.), scale_max=scale)
     
     fg_img = rescale(fg_img, scale)
-    fg_img, fg_weight_masks, fg_points = transform_image(fg_img, options)
+    fg_img, fg_weight_mask, fg_blur_mask, fg_points = transform_image(fg_img, options)
+    fg_dims = get_dims(fg_img)
 
-    random_location = get_random_placement(fg_dims, bg_dims)
-    img = patch_overlay(fg_img, bg_img, fg_weight_masks, random_location)
-    fg_points += np.asarray(random_location)
+    loc = get_random_placement(fg_dims, bg_dims)
+    img = patch_overlay(fg_img, bg_img, fg_weight_mask, loc)
+    fg_points += np.asarray(loc)
+
+    # blur the edge of foreground
+    patch = img[loc.y:loc.y + fg_dims.height, loc.x:loc.x + fg_dims.width, :]
+    blur_patch = blur(patch, 3)
+    blur_patch = np.where(fg_blur_mask > 0, blur_patch, patch)
+    img[loc.y:loc.y + fg_dims.height, loc.x:loc.x + fg_dims.width, :] = blur_patch
 
     return img, fg_points
-
-
-if __name__ == "__main__":
-    while True:
-        img = cv2.imread(os.path.join(Base_Path, "Mykad/cropped/Android - Huawei/4.jpg"))
-
-        fg_img = rescale(img)
-
-        new_img, points = generate(img, fg_img, OptionsA())
-
-        for point in points:
-            cv2.circle(new_img, tuple(point), 3, (0, 0, 255), -1)
-        
-        cv2.imshow("New", new_img)
-        
-        k = cv2.waitKey(0)
-        if k == 27:
-            break
-
-    cv2.destroyAllWindows()
